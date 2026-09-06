@@ -418,7 +418,7 @@ with tab2:
 
 
 # ──────────────────────────────────────────
-# TAB 3: WORKOUT PROGRESSION & GYM LOGGER
+# TAB 3: WORKOUT PROGRESSION & GYM LOGGER (HEVY/STRONG STYLE)
 # ──────────────────────────────────────────
 with tab3:
     st.title("🏋️ Workout Routine & Progression")
@@ -446,143 +446,271 @@ with tab3:
         ]
     }
     
+    exercise_muscles = {
+        "Chest Press Machine (Wide grip)": "Chest & Triceps",
+        "Shoulder Press (Dumbbell)": "Shoulders",
+        "Chest Fly (Machine)": "Chest",
+        "Lateral Raise (Machine)": "Side Delts",
+        "Triceps Pushdown (Cable)": "Triceps",
+        "Crunch (Machine)": "Abs / Core",
+        "Lat Pulldown (Cable)": "Lats & Upper Back",
+        "Seated Cable Row (V Grip)": "Mid Back & Lats",
+        "Bent Over Row (Barbell)": "Upper Back & Lats",
+        "Bent Over Row (Dumbbell)": "Upper Back",
+        "Bicep Curl (Barbell)": "Biceps",
+        "Hammer Curl (Dumbbell)": "Brachialis & Forearms",
+        "Leg Press Horizontal (Machine)": "Quads & Glutes",
+        "Leg Extension (Machine)": "Quads",
+        "Lying Leg Curl (Machine)": "Hamstrings",
+        "Sumo Squat (Dumbbell)": "Inner Thighs & Glutes",
+        "Seated Calf Raise": "Calves",
+        "Plank": "Core Stability",
+        "Chest Press Machine (Close grip)": "Triceps & Chest",
+        "Reverse Grip Lat Pulldown (Cable)": "Lats & Biceps",
+        "Front Raise (Dumbbell)": "Front Delts",
+        "Rear Delt Reverse Fly (Machine)": "Rear Delts",
+        "Overhead Triceps Extension (Dumbbell)": "Triceps Long Head",
+        "Preacher Curl (Machine)": "Biceps Peak",
+        "Squat (Bodyweight / Dumbbell)": "Quads & Glutes",
+        "Hip Abduction (Machine)": "Gluteus Medius"
+    }
+    
     cardio_finisher = {
         "Day 1": "Zone 2 Treadmill Walk (Incline 12-15%, Speed 5.0-5.5 km/h) for 20 mins (HR 115-135 BPM)",
         "Day 2": "Zone 2 Elliptical Trainer for 20 minutes",
         "Day 3": "Zone 2 Stationary/Recumbent Cycling for 20 minutes",
-        "Day 4": "Zone 2 Rowing Machine for 20 minutes (Targets trunk fat - 11.96 kg)",
+        "Day 4": "Zone 2 Rowing Machine for 20 minutes (Targets trunk fat)",
         "Day 5": "Zone 2 Treadmill Walk (Incline 12-15%, Speed 5.0-5.5 km/h) for 20 mins"
     }
     
-    selected_day = st.selectbox("Select Workout Routine", list(workout_routines.keys()))
-    exercises = workout_routines[selected_day]
-    day_key = selected_day.split(":")[0].strip()
+    # Workout Date & Routine Selectors
+    col_day_sel, col_date_sel = st.columns([2, 1])
+    with col_day_sel:
+        selected_day = st.selectbox("Select Workout Routine", list(workout_routines.keys()))
+    with col_date_sel:
+        workout_date = st.date_input("Date", datetime.today())
     
+    date_str = workout_date.strftime("%Y-%m-%d")
+    day_key = selected_day.split(":")[0].strip()
     st.warning(f"🏃‍♂️ **Cardio Finisher**: {cardio_finisher.get(day_key, '20 mins Zone 2 Cardio')}")
     
-    st.write("---")
-    st.subheader("Log Your Active Lift")
+    routine_exercises = list(workout_routines[selected_day])
     
-    with st.form("workout_form", clear_on_submit=False):
-        col_d, col_e = st.columns([1, 2])
-        with col_d:
-            log_date = st.date_input("Workout Date", datetime.today())
-        with col_e:
-            logged_exercise = st.selectbox("Select Exercise", exercises)
-        
-        col_s, col_w, col_r = st.columns(3)
-        with col_s:
-            set_num = st.number_input("Set Number", min_value=1, max_value=8, value=1)
-        with col_w:
-            weight_val = st.number_input("Weight (kg)", min_value=0.0, max_value=400.0, value=10.0, step=0.5)
-        with col_r:
-            reps_val = st.number_input("Reps", min_value=1, max_value=60, value=12)
-            
-        submit_workout = st.form_submit_button("⚡ Log Set Details")
-        
-        if submit_workout:
-            conn = get_db_connection()
-            conn.execute(
-                "INSERT INTO workout_logs (date, day_type, exercise_name, set_number, weight_kg, reps) VALUES (?, ?, ?, ?, ?, ?)",
-                (log_date.strftime("%Y-%m-%d"), selected_day, logged_exercise, set_num, weight_val, reps_val)
-            )
-            conn.commit()
-            conn.close()
-            st.success(f"Logged: Set {set_num} ({weight_val} kg × {reps_val} reps) for {logged_exercise}!")
-            
-    # Active Sets Logged for Selected Date
+    # Check what exercises in this routine already have logged sets today
     conn = get_db_connection()
-    logged_sets_today = pd.read_sql_query(
-        "SELECT id, day_type, exercise_name, set_number, weight_kg, reps FROM workout_logs WHERE date = ? ORDER BY id ASC",
-        conn, params=(log_date.strftime("%Y-%m-%d"),)
+    today_all_logs = pd.read_sql_query(
+        "SELECT id, exercise_name, set_number, weight_kg, reps FROM workout_logs WHERE date = ?",
+        conn, params=(date_str,)
     )
     conn.close()
     
-    if not logged_sets_today.empty:
-        st.write("---")
-        st.markdown(f"#### 📋 Logged Sets for {log_date.strftime('%Y-%m-%d')}")
-        st.dataframe(logged_sets_today[['exercise_name', 'set_number', 'weight_kg', 'reps', 'day_type']], use_container_width=True)
+    completed_counts = today_all_logs.groupby('exercise_name')['set_number'].count().to_dict() if not today_all_logs.empty else {}
+    
+    # Exercise Library / Picker with completion badges
+    exercise_display_labels = []
+    for ex in routine_exercises:
+        c = completed_counts.get(ex, 0)
+        badge = f" ({c} sets ✅)" if c > 0 else ""
+        exercise_display_labels.append(f"{ex}{badge}")
         
-        with st.expander("🗑️ Delete / Remove a Workout Set"):
-            set_options = logged_sets_today['id'].tolist()
-            col_sel_set, col_del_btn = st.columns([2, 1])
-            with col_sel_set:
-                target_set_id = st.selectbox(
-                    "Select Set to Remove",
-                    set_options,
-                    format_func=lambda sid: f"ID {sid}: {logged_sets_today[logged_sets_today['id'] == sid]['exercise_name'].values[0]} — Set {logged_sets_today[logged_sets_today['id'] == sid]['set_number'].values[0]} ({logged_sets_today[logged_sets_today['id'] == sid]['weight_kg'].values[0]} kg × {logged_sets_today[logged_sets_today['id'] == sid]['reps'].values[0]} reps)",
-                    key="select_del_set_id"
-                )
-            with col_del_btn:
-                st.write("")
-                st.write("")
-                if st.button("Delete Set", key="btn_del_single_set"):
-                    conn = get_db_connection()
-                    conn.execute("DELETE FROM workout_logs WHERE id = ?", (target_set_id,))
-                    conn.commit()
-                    conn.close()
-                    st.success("Selected set removed!")
-                    st.rerun()
-            
-            st.write("---")
-            if st.button(f"⚠️ Delete ALL {len(logged_sets_today)} Sets for {log_date.strftime('%Y-%m-%d')}", key="btn_del_all_workout_sets"):
-                conn = get_db_connection()
-                conn.execute("DELETE FROM workout_logs WHERE date = ?", (log_date.strftime("%Y-%m-%d"),))
-                conn.commit()
-                conn.close()
-                st.warning(f"All sets for {log_date.strftime('%Y-%m-%d')} removed!")
-                st.rerun()
-
-    # Exercise Progression History
+    exercise_display_labels.append("➕ Custom / Other Exercise...")
+    
+    col_ex_pick, col_custom = st.columns([3, 1])
+    with col_ex_pick:
+        picked_label = st.selectbox("Select Exercise to Log", exercise_display_labels)
+    
+    if picked_label == "➕ Custom / Other Exercise...":
+        with col_custom:
+            selected_exercise = st.text_input("Enter Exercise Name", value="Bent Over Row (Dumbbell)")
+    else:
+        # Strip the completion badge to get clean exercise name
+        selected_exercise = picked_label.split(" (")[0]
+        
+    muscle_group = exercise_muscles.get(selected_exercise, "Strength / Hypertrophy")
+    
     st.write("---")
-    st.subheader("📈 Exercise Progression (Double Progression)")
+    
+    # ─── INTERACTIVE HEVY-STYLE EXERCISE CARD ───
+    st.markdown(f"""
+    <div style="background: #1e293b; border-radius: 12px; padding: 16px; border: 1px solid #334155; margin-bottom: 15px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h3 style="margin: 0; color: #ffffff; font-size: 1.3rem;">🏋️‍♂️ {selected_exercise}</h3>
+                <span style="color: #38bdf8; font-size: 0.85rem; font-weight: 600;">{muscle_group}</span>
+            </div>
+            <span style="background: #334155; color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.8rem;">
+                {date_str}
+            </span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col_note, col_timer = st.columns([2, 1])
+    with col_note:
+        st.text_input("Note", placeholder="Add pinned note (e.g. felt light, form cues)", key=f"note_{selected_exercise}_{date_str}", label_visibility="collapsed")
+    with col_timer:
+        rest_choice = st.selectbox("Rest Timer", ["Rest: Off", "Rest: 30s", "Rest: 60s", "Rest: 90s", "Rest: 120s", "Rest: 180s"], index=2, key=f"rest_{selected_exercise}", label_visibility="collapsed")
+    
+    # Fetch existing logged sets for this exercise on this date
     conn = get_db_connection()
-    all_exercises_logged = pd.read_sql_query("SELECT DISTINCT exercise_name FROM workout_logs", conn)
+    current_ex_sets = pd.read_sql_query(
+        "SELECT id, set_number, weight_kg, reps FROM workout_logs WHERE date = ? AND exercise_name = ? ORDER BY set_number ASC",
+        conn, params=(date_str, selected_exercise)
+    )
     conn.close()
     
-    if not all_exercises_logged.empty:
-        exercise_list = all_exercises_logged['exercise_name'].tolist()
-        default_idx = exercise_list.index(logged_exercise) if logged_exercise in exercise_list else 0
-        history_exercise = st.selectbox("Choose Exercise to View Progression", exercise_list, index=default_idx)
+    existing_sets_dict = {row['set_number']: row for _, row in current_ex_sets.iterrows()}
+    
+    # Maintain number of set rows in session_state
+    state_key_count = f"num_sets_{selected_exercise}_{date_str}"
+    if state_key_count not in st.session_state:
+        max_logged = max(existing_sets_dict.keys()) if existing_sets_dict else 3
+        st.session_state[state_key_count] = max(3, max_logged)
         
-        conn = get_db_connection()
-        history_df = pd.read_sql_query(
-            "SELECT id, date, set_number, weight_kg, reps FROM workout_logs WHERE exercise_name = ? ORDER BY date ASC, set_number ASC",
-            conn, params=(history_exercise,)
-        )
-        conn.close()
+    num_rows = st.session_state[state_key_count]
+    
+    # Set Table Headers
+    col_h_set, col_h_kg, col_h_reps, col_h_act = st.columns([1, 2.5, 2.5, 2])
+    with col_h_set:
+        st.markdown("<p style='text-align:center; font-weight:bold; color:#94a3b8; font-size:0.8rem; margin:0;'>SET</p>", unsafe_allow_html=True)
+    with col_h_kg:
+        st.markdown("<p style='text-align:center; font-weight:bold; color:#94a3b8; font-size:0.8rem; margin:0;'>KG</p>", unsafe_allow_html=True)
+    with col_h_reps:
+        st.markdown("<p style='text-align:center; font-weight:bold; color:#94a3b8; font-size:0.8rem; margin:0;'>REPS</p>", unsafe_allow_html=True)
+    with col_h_act:
+        st.markdown("<p style='text-align:center; font-weight:bold; color:#94a3b8; font-size:0.8rem; margin:0;'>ACTION</p>", unsafe_allow_html=True)
         
-        if not history_df.empty:
-            max_lifts = history_df.groupby('date')['weight_kg'].max().reset_index()
-            fig = px.line(max_lifts, x='date', y='weight_kg', title=f"Max Weight Lifted Trend — {history_exercise}", markers=True)
-            fig.update_traces(line_color="#38bdf8", marker=dict(size=9, color="#ff4b4b"))
-            fig.update_layout(template="plotly_dark", yaxis_title="Max Weight (kg)", xaxis_title="Date")
-            st.plotly_chart(fig, use_container_width=True)
+    # Render Interactive Set Rows
+    for s_idx in range(1, num_rows + 1):
+        is_saved = s_idx in existing_sets_dict
+        saved_row = existing_sets_dict.get(s_idx, None)
+        
+        default_kg = float(saved_row['weight_kg']) if is_saved else 10.0
+        default_reps = int(saved_row['reps']) if is_saved else 12
+        
+        c_set, c_kg, c_reps, c_act = st.columns([1, 2.5, 2.5, 2])
+        
+        with c_set:
+            badge_bg = "#22c55e" if is_saved else "#334155"
+            badge_text = "white"
+            st.markdown(
+                f"<div style='background:{badge_bg}; color:{badge_text}; font-weight:bold; text-align:center; border-radius:8px; padding:6px 0; margin-top:2px;'>{s_idx}</div>",
+                unsafe_allow_html=True
+            )
             
-            with st.expander(f"📋 View & Manage Logged Sets for {history_exercise}"):
-                st.dataframe(history_df[['id', 'date', 'set_number', 'weight_kg', 'reps']], use_container_width=True)
-                col_hist_id, col_hist_btn = st.columns([2, 1])
-                with col_hist_id:
-                    hist_set_del = st.selectbox(
-                        "Remove Specific Set",
-                        history_df['id'].tolist(),
-                        format_func=lambda hid: f"ID {hid} ({history_df[history_df['id'] == hid]['date'].values[0]}): Set {history_df[history_df['id'] == hid]['set_number'].values[0]} - {history_df[history_df['id'] == hid]['weight_kg'].values[0]}kg × {history_df[history_df['id'] == hid]['reps'].values[0]} reps",
-                        key="select_hist_del_id"
-                    )
-                with col_hist_btn:
-                    st.write("")
-                    st.write("")
-                    if st.button("Delete Set", key="btn_del_hist_set"):
+        with c_kg:
+            val_kg = st.number_input(
+                f"KG {s_idx}", 
+                min_value=0.0, 
+                max_value=500.0, 
+                value=default_kg, 
+                step=0.5, 
+                key=f"input_kg_{selected_exercise}_{date_str}_{s_idx}", 
+                label_visibility="collapsed"
+            )
+            
+        with c_reps:
+            val_reps = st.number_input(
+                f"Reps {s_idx}", 
+                min_value=1, 
+                max_value=100, 
+                value=default_reps, 
+                step=1, 
+                key=f"input_reps_{selected_exercise}_{date_str}_{s_idx}", 
+                label_visibility="collapsed"
+            )
+            
+        with c_act:
+            sub_col_tick, sub_col_del = st.columns([1, 1])
+            with sub_col_tick:
+                tick_icon = "✅" if is_saved else "✔️"
+                tick_help = "Completed! Click to update" if is_saved else "Click tick to complete set"
+                if st.button(tick_icon, key=f"btn_tick_{selected_exercise}_{date_str}_{s_idx}", help=tick_help):
+                    conn = get_db_connection()
+                    if is_saved:
+                        conn.execute(
+                            "UPDATE workout_logs SET weight_kg = ?, reps = ?, day_type = ? WHERE id = ?",
+                            (val_kg, val_reps, selected_day, saved_row['id'])
+                        )
+                        st.toast(f"Set {s_idx} updated: {val_kg} kg × {val_reps} reps! 🔄")
+                    else:
+                        conn.execute(
+                            "INSERT INTO workout_logs (date, day_type, exercise_name, set_number, weight_kg, reps) VALUES (?, ?, ?, ?, ?, ?)",
+                            (date_str, selected_day, selected_exercise, s_idx, val_kg, val_reps)
+                        )
+                        st.toast(f"Set {s_idx} completed: {val_kg} kg × {val_reps} reps! ✅")
+                    conn.commit()
+                    conn.close()
+                    st.rerun()
+                    
+            with sub_col_del:
+                if st.button("❌", key=f"btn_del_{selected_exercise}_{date_str}_{s_idx}", help="Remove set"):
+                    if is_saved:
                         conn = get_db_connection()
-                        conn.execute("DELETE FROM workout_logs WHERE id = ?", (hist_set_del,))
+                        conn.execute("DELETE FROM workout_logs WHERE id = ?", (saved_row['id'],))
                         conn.commit()
                         conn.close()
-                        st.success("Historical set removed!")
-                        st.rerun()
-        else:
-            st.info("No progression history logged yet for this exercise.")
+                        st.toast(f"Set {s_idx} deleted from database! 🗑️")
+                    else:
+                        st.toast(f"Set {s_idx} removed!")
+                    
+                    if s_idx == num_rows and num_rows > 1:
+                        st.session_state[state_key_count] = num_rows - 1
+                    st.rerun()
+                    
+    # + Add Set Button
+    st.write("")
+    if st.button("➕ Add Set", key=f"btn_add_set_{selected_exercise}_{date_str}", use_container_width=True):
+        st.session_state[state_key_count] = num_rows + 1
+        st.rerun()
+        
+    # Rest Timer Notification if set
+    if rest_choice != "Rest: Off":
+        st.info(f"⏱️ **{rest_choice}**: Rest timer active! Take deep breaths before next set.")
+        
+    st.write("---")
+    
+    # ─── TODAY'S WORKOUT SUMMARY ───
+    if not today_all_logs.empty:
+        total_sets_done = len(today_all_logs)
+        total_volume = (today_all_logs['weight_kg'] * today_all_logs['reps']).sum()
+        
+        st.markdown(f"#### 📊 Session Summary for {date_str}")
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            st.metric("Total Sets Completed", f"{total_sets_done} sets")
+        with col_m2:
+            st.metric("Total Lift Volume", f"{total_volume:,.0f} kg")
+            
+        with st.expander(f"📋 View All Logged Sets for {date_str}"):
+            st.dataframe(today_all_logs[['exercise_name', 'set_number', 'weight_kg', 'reps', 'day_type']], use_container_width=True)
+            if st.button(f"⚠️ Delete ALL Sets for {date_str}", key="btn_del_all_today"):
+                conn = get_db_connection()
+                conn.execute("DELETE FROM workout_logs WHERE date = ?", (date_str,))
+                conn.commit()
+                conn.close()
+                st.warning(f"All sets for {date_str} cleared!")
+                st.rerun()
+                
+    # ─── EXERCISE PROGRESSION HISTORY CHART ───
+    st.write("---")
+    st.subheader(f"📈 Double Progression Trend: {selected_exercise}")
+    
+    conn = get_db_connection()
+    history_df = pd.read_sql_query(
+        "SELECT id, date, set_number, weight_kg, reps FROM workout_logs WHERE exercise_name = ? ORDER BY date ASC, set_number ASC",
+        conn, params=(selected_exercise,)
+    )
+    conn.close()
+    
+    if not history_df.empty:
+        max_lifts = history_df.groupby('date')['weight_kg'].max().reset_index()
+        fig = px.line(max_lifts, x='date', y='weight_kg', title=f"Max Weight Lifted Trend — {selected_exercise}", markers=True)
+        fig.update_traces(line_color="#38bdf8", marker=dict(size=9, color="#ff4b4b"))
+        fig.update_layout(template="plotly_dark", yaxis_title="Max Load (kg)", xaxis_title="Date")
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("Start logging sets above to see your exercise progression charts!")
+        st.info(f"No previous workouts logged for {selected_exercise}. Complete sets above to start tracking your strength curve!")
 
 
 # ──────────────────────────────────────────
