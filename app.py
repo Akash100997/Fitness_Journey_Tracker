@@ -154,12 +154,14 @@ init_db()
 
 # ─── GEMINI AI NUTRITION SERVICE ───
 CURATED_MODELS = [
-    "gemini-3.8-flash (Recommended — Fastest & Best)",
-    "gemini-3.7-flash (Alternative Flash)",
-    "gemini-3.8-pro (High Detail Reasoning)"
+    "gemini-3.5-flash-lite (Ultra Fast & High Quota — Recommended)",
+    "gemini-3.5-flash (Balanced & Detailed)",
+    "gemini-flash-lite-latest (Fast Lite)",
+    "gemini-3.8-flash (Preview — Low Daily Quota)",
+    "gemini-3.7-flash (Alternative Flash)"
 ]
 
-def analyze_meal_image(api_key, image, model_name="gemini-3.8-flash"):
+def analyze_meal_image(api_key, image, model_name="gemini-3.5-flash-lite"):
     prompt = """
     You are an expert sports nutritionist AI. Analyze this meal photo.
     Estimate the macronutrient breakdown. The user is a Hindu eggetarian (no meat/fish, skips eggs on Saturday, relies on lentils, paneer, tofu, soya chunks, eggs on weekdays, curd, roti, rice).
@@ -190,31 +192,45 @@ def analyze_meal_image(api_key, image, model_name="gemini-3.8-flash"):
         
     # Priority order of models to try
     candidates = [clean_model]
-    for m in ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-flash", "gemini-2.5-flash", "gemini-2.0-flash"]:
+    for m in [
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-flash-lite-latest",
+        "gemini-flash-latest",
+        "gemini-3.8-flash",
+        "gemini-3.7-flash"
+    ]:
         if m not in candidates:
             candidates.append(m)
             
     last_err = None
     for cand in candidates:
         try:
+            text_response = None
             # 1. Try modern official google-genai SDK
             try:
                 from google import genai
                 from google.genai import types
                 client = genai.Client(api_key=api_key)
                 
-                # ── SPEED OPTIMIZATION 2: Direct Low-Latency Token Generation ──
+                # Direct Low-Latency Token Generation with ample token budget
                 response = client.models.generate_content(
                     model=cand,
                     contents=[img_optimized, prompt],
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
-                        max_output_tokens=300,
+                        max_output_tokens=1000,
                         temperature=0.2
                     )
                 )
                 text_response = response.text.strip()
-            except Exception:
+            except Exception as e_genai:
+                err_str = str(e_genai)
+                # If 429 quota exhausted on this model, skip legacy retry for same model
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    last_err = e_genai
+                    continue
+                    
                 # 2. Fallback to legacy google.generativeai SDK
                 import google.generativeai as legacy_genai
                 legacy_genai.configure(api_key=api_key)
@@ -222,19 +238,24 @@ def analyze_meal_image(api_key, image, model_name="gemini-3.8-flash"):
                     cand,
                     generation_config={
                         "response_mime_type": "application/json",
-                        "max_output_tokens": 300,
+                        "max_output_tokens": 1000,
                         "temperature": 0.2
                     }
                 )
                 response = model.generate_content([prompt, img_optimized])
                 text_response = response.text.strip()
                 
+            if not text_response:
+                continue
+                
             if text_response.startswith("```"):
                 text_response = text_response.split("```")[1]
                 if text_response.startswith("json"):
                     text_response = text_response[4:]
                     
-            return json.loads(text_response.strip())
+            parsed_data = json.loads(text_response.strip())
+            parsed_data["model_used"] = cand
+            return parsed_data
         except Exception as e:
             last_err = e
             continue
@@ -807,12 +828,16 @@ with tab4:
                         st.session_state['ai_protein'] = float(meal_macros.get("protein", 0.0))
                         st.session_state['ai_carbs'] = float(meal_macros.get("carbs", 0.0))
                         st.session_state['ai_fat'] = float(meal_macros.get("fat", 0.0))
-                        st.success(f"⚡ Meal Analyzed in {duration:.1f}s ({model_choice.split(' ')[0]})! Verify details below.")
+                        model_used_name = meal_macros.get("model_used", model_choice.split(" ")[0])
+                        st.session_state['scan_success_msg'] = f"⚡ Meal Analyzed in {duration:.1f}s ({model_used_name})! Verify details below."
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Failed to analyze image: {e}")
                         
     st.write("---")
     st.subheader("📝 Verify & Save to Food Log")
+    if 'scan_success_msg' in st.session_state:
+        st.success(st.session_state['scan_success_msg'])
     
     desc = st.text_input("Food Description", value=st.session_state.get('ai_description', ''))
     col_cal, col_p = st.columns(2)
@@ -848,7 +873,7 @@ with tab4:
             conn.close()
             st.success(f"Saved: {desc} ({cals:.0f} kcal, {prots:.1f}g protein) logged!")
             
-            for key in ['ai_description', 'ai_calories', 'ai_protein', 'ai_carbs', 'ai_fat']:
+            for key in ['ai_description', 'ai_calories', 'ai_protein', 'ai_carbs', 'ai_fat', 'scan_success_msg']:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
