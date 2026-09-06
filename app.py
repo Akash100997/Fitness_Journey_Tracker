@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import os
 import json
 import io
+import time
 from PIL import Image
 
 # Setup page config for mobile-first responsive layout
@@ -797,14 +798,16 @@ with tab4:
             else:
                 with st.spinner(f"Analyzing meal ingredients with {model_choice}..."):
                     try:
+                        start_time = time.time()
                         meal_macros = analyze_meal_image(api_key, image, model_name=model_choice)
+                        duration = time.time() - start_time
                         
                         st.session_state['ai_description'] = str(meal_macros.get("food_description", "Meal"))
                         st.session_state['ai_calories'] = float(meal_macros.get("calories", 0.0))
                         st.session_state['ai_protein'] = float(meal_macros.get("protein", 0.0))
                         st.session_state['ai_carbs'] = float(meal_macros.get("carbs", 0.0))
                         st.session_state['ai_fat'] = float(meal_macros.get("fat", 0.0))
-                        st.success("Meal Scan Analysis Completed! Verify details below.")
+                        st.success(f"⚡ Meal Analyzed in {duration:.1f}s ({model_choice.split(' ')[0]})! Verify details below.")
                     except Exception as e:
                         st.error(f"Failed to analyze image: {e}")
                         
