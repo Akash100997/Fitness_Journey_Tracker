@@ -113,9 +113,9 @@ class TursoCompatCursor:
 
     @property
     def description(self):
-        if not self._result or not self._result.columns:
-            return None
-        return [(col, None, None, None, None, None, None) for col in self._result.columns]
+        if self._result and self._result.columns:
+            return [(col, None, None, None, None, None, None) for col in self._result.columns]
+        return []
 
 class TursoCompatConnection:
     def __init__(self, client):
@@ -160,6 +160,23 @@ def get_db_connection():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
+
+def run_query_df(sql, params=None):
+    """Universal robust DataFrame query helper that works seamlessly with both local SQLite and Turso Cloud."""
+    conn = get_db_connection()
+    try:
+        if isinstance(conn, TursoCompatConnection):
+            p = list(params) if params else None
+            res = conn.client.execute(sql, p)
+            cols = list(res.columns) if res and res.columns else []
+            rows = [list(r) for r in res.rows] if res and res.rows else []
+            return pd.DataFrame(rows, columns=cols if cols else None)
+        else:
+            return pd.read_sql_query(sql, conn, params=params)
+    except Exception as e:
+        return pd.DataFrame()
+    finally:
+        conn.close()
 
 def init_db():
     conn = get_db_connection()
@@ -721,9 +738,7 @@ with tab2:
             st.rerun()
             
     # Load weight logs and calculate moving average
-    conn = get_db_connection()
-    weights_df = pd.read_sql_query("SELECT * FROM weight_logs ORDER BY date ASC", conn)
-    conn.close()
+    weights_df = run_query_df("SELECT * FROM weight_logs ORDER BY date ASC")
     
     if not weights_df.empty:
         weights_df['date'] = pd.to_datetime(weights_df['date'])
@@ -869,12 +884,10 @@ with tab3:
     routine_exercises = list(workout_routines[selected_day])
     
     # Check what exercises in this routine already have logged sets today
-    conn = get_db_connection()
-    today_all_logs = pd.read_sql_query(
+    today_all_logs = run_query_df(
         "SELECT id, exercise_name, set_number, weight_kg, reps FROM workout_logs WHERE date = ?",
-        conn, params=(date_str,)
+        params=(date_str,)
     )
-    conn.close()
     
     completed_counts = today_all_logs.groupby('exercise_name')['set_number'].count().to_dict() if not today_all_logs.empty else {}
     
@@ -903,23 +916,21 @@ with tab3:
     st.write("---")
     
     # Fetch existing logged sets for this exercise on this date
-    conn = get_db_connection()
-    current_ex_sets = pd.read_sql_query(
+    current_ex_sets = run_query_df(
         "SELECT id, set_number, weight_kg, reps FROM workout_logs WHERE date = ? AND exercise_name = ? ORDER BY set_number ASC",
-        conn, params=(date_str, selected_exercise)
+        params=(date_str, selected_exercise)
     )
     
     # Fetch previous session sets for this exercise (before current date)
-    prev_session_sets = pd.read_sql_query(
+    prev_session_sets = run_query_df(
         """
         SELECT set_number, weight_kg, reps, date FROM workout_logs 
         WHERE exercise_name = ? AND date < ? 
         AND date = (SELECT MAX(date) FROM workout_logs WHERE exercise_name = ? AND date < ?)
         ORDER BY set_number ASC
         """,
-        conn, params=(selected_exercise, date_str, selected_exercise, date_str)
+        params=(selected_exercise, date_str, selected_exercise, date_str)
     )
-    conn.close()
     
     existing_sets_dict = {row['set_number']: row for _, row in current_ex_sets.iterrows()}
     prev_sets_dict = {row['set_number']: row for _, row in prev_session_sets.iterrows()}
@@ -1111,12 +1122,10 @@ with tab3:
     st.write("---")
     st.subheader(f"📈 Double Progression Trend: {selected_exercise}")
     
-    conn = get_db_connection()
-    history_df = pd.read_sql_query(
+    history_df = run_query_df(
         "SELECT id, date, set_number, weight_kg, reps FROM workout_logs WHERE exercise_name = ? ORDER BY date ASC, set_number ASC",
-        conn, params=(selected_exercise,)
+        params=(selected_exercise,)
     )
-    conn.close()
     
     if not history_df.empty:
         max_lifts = history_df.groupby('date')['weight_kg'].max().reset_index()
@@ -1337,12 +1346,10 @@ with tab4:
     # Display today's meals table
     st.write("---")
     st.subheader("📅 Today's Food Logs")
-    conn = get_db_connection()
-    today_logs_df = pd.read_sql_query(
+    today_logs_df = run_query_df(
         "SELECT id, meal_type, food_description, calories, protein, carbs, fat FROM nutrition_logs WHERE date = ? ORDER BY id DESC",
-        conn, params=(datetime.now().strftime("%Y-%m-%d"),)
+        params=(datetime.now().strftime("%Y-%m-%d"),)
     )
-    conn.close()
     
     if not today_logs_df.empty:
         st.dataframe(today_logs_df[['meal_type', 'food_description', 'calories', 'protein', 'carbs', 'fat']], width="stretch")
