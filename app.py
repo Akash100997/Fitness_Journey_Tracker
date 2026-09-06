@@ -141,6 +141,13 @@ def init_db():
         fat REAL NOT NULL
     )""")
     
+    # 5. Water intake logs
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS water_logs (
+        date TEXT PRIMARY KEY,
+        water_ml INTEGER DEFAULT 0
+    )""")
+    
     # Seed initial weight log to show trend if empty
     cursor.execute("SELECT COUNT(*) FROM weight_logs")
     if cursor.fetchone()[0] == 0:
@@ -149,6 +156,22 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+def get_water_log(date_str):
+    conn = get_db_connection()
+    row = conn.execute("SELECT water_ml FROM water_logs WHERE date = ?", (date_str,)).fetchone()
+    conn.close()
+    return int(row['water_ml']) if row else 0
+
+def update_water_log(date_str, delta_ml):
+    conn = get_db_connection()
+    current = conn.execute("SELECT water_ml FROM water_logs WHERE date = ?", (date_str,)).fetchone()
+    current_val = int(current['water_ml']) if current else 0
+    new_val = max(0, current_val + delta_ml)
+    conn.execute("INSERT OR REPLACE INTO water_logs (date, water_ml) VALUES (?, ?)", (date_str, new_val))
+    conn.commit()
+    conn.close()
+    return new_val
 
 init_db()
 
@@ -319,7 +342,7 @@ with tab1:
     today_str = datetime.now().strftime("%Y-%m-%d")
     
     nutrition_today = conn.execute(
-        "SELECT COALESCE(SUM(calories), 0) as cal, COALESCE(SUM(protein), 0) as prot FROM nutrition_logs WHERE date = ?", 
+        "SELECT COALESCE(SUM(calories), 0) as cal, COALESCE(SUM(protein), 0) as prot, COALESCE(SUM(carbs), 0) as carbs, COALESCE(SUM(fat), 0) as fat FROM nutrition_logs WHERE date = ?", 
         (today_str,)
     ).fetchone()
     
@@ -328,6 +351,14 @@ with tab1:
     
     cal_eaten = float(nutrition_today['cal'])
     prot_eaten = float(nutrition_today['prot'])
+    carbs_eaten = float(nutrition_today['carbs'])
+    fat_eaten = float(nutrition_today['fat'])
+    
+    target_cal = float(profile['target_calories'])
+    target_prot = float(profile['target_protein'])
+    tdee = float(profile['tdee_kcal'])
+    net_deficit = tdee - cal_eaten
+    target_deficit = tdee - target_cal
     
     # Core Baseline Stats
     col1, col2, col3 = st.columns(3)
@@ -340,6 +371,31 @@ with tab1:
         st.metric("Fat Loss Target", f"-{profile['target_fat_loss_kg']} kg", delta="Target")
         
     st.write("---")
+    
+    # ─── ENERGY BALANCE & NET DEFICIT ───
+    st.subheader("🔥 Fat Loss Energy Balance & Net Deficit")
+    col_def1, col_def2 = st.columns([1.5, 1])
+    with col_def1:
+        deficit_color = "#22c55e" if net_deficit >= 400 else ("#f59e0b" if net_deficit > 0 else "#ef4444")
+        deficit_status = "🔥 Optimal Fat Burning Zone" if net_deficit >= 400 else ("⚠️ Modest Deficit" if net_deficit > 0 else "🚨 In Calorie Surplus")
+        st.markdown(f"""
+        <div class="metric-card" style="border-left-color: {deficit_color};">
+            <h4>Live Net Deficit (TDEE: {tdee:.0f} kcal)</h4>
+            <h2 style="color: {deficit_color};">{net_deficit:+.0f} kcal</h2>
+            <p><strong>{deficit_status}</strong> (Target Deficit: ~{target_deficit:.0f} kcal/day)</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_def2:
+        st.markdown(f"""
+        <div style="background-color: #1e293b; padding: 16px; border-radius: 8px; color: white; height: 100%; display: flex; flex-direction: column; justify-content: center;">
+            <p style="margin: 0 0 6px 0; color: #94a3b8; font-size: 0.85rem; font-weight: bold;">CALORIC BREAKDOWN</p>
+            <div style="font-size: 0.95rem; line-height: 1.6;">
+                • <strong>Eaten:</strong> {cal_eaten:.0f} kcal<br>
+                • <strong>Target:</strong> {target_cal:.0f} kcal<br>
+                • <strong>Remaining:</strong> {max(0.0, target_cal - cal_eaten):.0f} kcal
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
     
     # Daily Progress Indicators
     st.subheader("🎯 Today's Targets")
@@ -368,6 +424,89 @@ with tab1:
         """, unsafe_allow_html=True)
         st.progress(prot_pct)
 
+    # Carbs & Fats Row
+    col_carb_card, col_fat_card = st.columns(2)
+    with col_carb_card:
+        st.markdown(f"""
+        <div style="background-color: #1e293b; border-left: 5px solid #fbbf24; padding: 14px; border-radius: 8px; color: white;">
+            <span style="color: #94a3b8; font-size: 0.85rem; text-transform: uppercase;">Carbohydrates Logged</span>
+            <h3 style="margin: 4px 0; color: #fbbf24; font-size: 1.5rem;">{carbs_eaten:.1f} g</h3>
+            <p style="margin: 0; color: #cbd5e1; font-size: 0.85rem;">Energy supply ({carbs_eaten * 4:.0f} kcal)</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_fat_card:
+        st.markdown(f"""
+        <div style="background-color: #1e293b; border-left: 5px solid #f43f5e; padding: 14px; border-radius: 8px; color: white;">
+            <span style="color: #94a3b8; font-size: 0.85rem; text-transform: uppercase;">Dietary Fats Logged</span>
+            <h3 style="margin: 4px 0; color: #f43f5e; font-size: 1.5rem;">{fat_eaten:.1f} g</h3>
+            <p style="margin: 0; color: #cbd5e1; font-size: 0.85rem;">Hormone balance ({fat_eaten * 9:.0f} kcal)</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Macro Split Percentage Bar if food logged
+    total_macro_cals = (prot_eaten * 4) + (carbs_eaten * 4) + (fat_eaten * 9)
+    if total_macro_cals > 0:
+        pct_p = (prot_eaten * 4) / total_macro_cals * 100
+        pct_c = (carbs_eaten * 4) / total_macro_cals * 100
+        pct_f = (fat_eaten * 9) / total_macro_cals * 100
+        st.write("")
+        st.markdown(f"""
+        <div style="display: flex; gap: 8px; align-items: center; justify-content: space-around; background: #0f172a; padding: 10px; border-radius: 8px; font-size: 0.85rem; border: 1px solid #334155;">
+            <span style="color: #38bdf8; font-weight: 600;">🥩 Protein: {pct_p:.0f}%</span>
+            <span style="color: #fbbf24; font-weight: 600;">🍞 Carbs: {pct_c:.0f}%</span>
+            <span style="color: #f43f5e; font-weight: 600;">🥑 Fat: {pct_f:.0f}%</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # ─── INTERACTIVE WATER INTAKE TRACKER ───
+    st.write("---")
+    st.subheader("💧 Daily Water Intake Tracker")
+    target_water_ml = int(profile['water_target_liters'] * 1000)
+    water_today = get_water_log(today_str)
+    water_pct = min(1.0, water_today / max(1, target_water_ml))
+    water_remaining_ml = max(0, target_water_ml - water_today)
+    
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #0c4a6e 0%, #082f49 100%); border-left: 5px solid #38bdf8; padding: 16px; border-radius: 8px; color: white; margin-bottom: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h4 style="margin: 0; color: #7dd3fc; text-transform: uppercase; font-size: 0.9rem;">Hydration Goal</h4>
+                <h2 style="margin: 4px 0; font-size: 1.8rem; font-weight: 700;">{water_today:,} / {target_water_ml:,} ml</h2>
+            </div>
+            <div style="text-align: right;">
+                <span style="background: #0369a1; padding: 6px 12px; border-radius: 9999px; font-size: 0.9rem; font-weight: 700;">
+                    {water_pct * 100:.0f}%
+                </span>
+                <p style="margin: 6px 0 0 0; font-size: 0.85rem; color: #bae6fd;">{water_remaining_ml:,} ml remaining</p>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.progress(water_pct)
+    
+    # Quick Tap Water Buttons
+    col_w250, col_w500, col_w1000, col_wundo = st.columns(4)
+    with col_w250:
+        if st.button("💧 +250ml", key="btn_w250", help="Glass of water"):
+            new_w = update_water_log(today_str, 250)
+            st.toast(f"Logged +250ml water! ({new_w:,} ml total) 💧")
+            st.rerun()
+    with col_w500:
+        if st.button("🍶 +500ml", key="btn_w500", help="Water bottle"):
+            new_w = update_water_log(today_str, 500)
+            st.toast(f"Logged +500ml water! ({new_w:,} ml total) 🍶")
+            st.rerun()
+    with col_w1000:
+        if st.button("🧊 +1.0L", key="btn_w1000", help="Large shaker"):
+            new_w = update_water_log(today_str, 1000)
+            st.toast(f"Logged +1,000ml water! ({new_w:,} ml total) 🧊")
+            st.rerun()
+    with col_wundo:
+        if st.button("↩️ -250ml", key="btn_wundo", help="Undo / remove 250ml"):
+            new_w = update_water_log(today_str, -250)
+            st.toast(f"Removed 250ml water. ({new_w:,} ml total)")
+            st.rerun()
+
     # 12-Week Countdown
     st.write("---")
     start_date = datetime(2026, 9, 3)
@@ -379,23 +518,14 @@ with tab1:
     st.info(f"📆 **12-Week Metabolic Reset Countdown**: You are in **Week {weeks_passed + 1}** (Day {days_passed + 1}). **{weeks_remaining} weeks** remaining to hit your 66.9 kg target!")
     
     # Quick Action Summary Cards
-    col_w_info, col_m_info = st.columns(2)
-    with col_w_info:
-        st.markdown(f"""
-        <div style="background-color: #1e293b; padding: 12px; border-radius: 8px; color: white;">
-            <strong>💧 Daily Water Target:</strong> {profile['water_target_liters']} Liters<br>
-            <strong>🔥 Resting BMR:</strong> {profile['bmr_kcal']:.0f} kcal | <strong>TDEE:</strong> {profile['tdee_kcal']:.0f} kcal
-        </div>
-        """, unsafe_allow_html=True)
-    with col_m_info:
-        is_sat = datetime.now().weekday() == 5
-        sat_msg = "🕉️ **Saturday Egg-Free Mode** active!" if is_sat else "🍳 **Egg-friendly Weekday** active."
-        st.markdown(f"""
-        <div style="background-color: #1e293b; padding: 12px; border-radius: 8px; color: white;">
-            <strong>🥗 Diet Status:</strong> {sat_msg}<br>
-            <strong>🎯 Fat Control Goal:</strong> 22.6 kg → 11.7 kg Fat
-        </div>
-        """, unsafe_allow_html=True)
+    is_sat = datetime.now().weekday() == 5
+    sat_msg = "🕉️ **Saturday Egg-Free Mode active** (Prioritize soya, paneer, tofu & lentils)." if is_sat else "🍳 **Egg-friendly Weekday active** (Boiled eggs, omelettes, paneer to reach 110g protein)."
+    st.markdown(f"""
+    <div style="background-color: #1e293b; padding: 12px; border-radius: 8px; color: white; border: 1px solid #334155;">
+        <strong>🥗 Diet Protocol:</strong> {sat_msg}<br>
+        <strong>🎯 Accuniq Baseline Targets:</strong> BMR: {profile['bmr_kcal']:.0f} kcal | TDEE: {tdee:.0f} kcal | Fat Control: 22.6 kg → 11.7 kg
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # ──────────────────────────────────────────
@@ -605,13 +735,38 @@ with tab3:
     
     st.write("---")
     
+    # Fetch existing logged sets for this exercise on this date
+    conn = get_db_connection()
+    current_ex_sets = pd.read_sql_query(
+        "SELECT id, set_number, weight_kg, reps FROM workout_logs WHERE date = ? AND exercise_name = ? ORDER BY set_number ASC",
+        conn, params=(date_str, selected_exercise)
+    )
+    
+    # Fetch previous session sets for this exercise (before current date)
+    prev_session_sets = pd.read_sql_query(
+        """
+        SELECT set_number, weight_kg, reps, date FROM workout_logs 
+        WHERE exercise_name = ? AND date < ? 
+        AND date = (SELECT MAX(date) FROM workout_logs WHERE exercise_name = ? AND date < ?)
+        ORDER BY set_number ASC
+        """,
+        conn, params=(selected_exercise, date_str, selected_exercise, date_str)
+    )
+    conn.close()
+    
+    existing_sets_dict = {row['set_number']: row for _, row in current_ex_sets.iterrows()}
+    prev_sets_dict = {row['set_number']: row for _, row in prev_session_sets.iterrows()}
+    prev_date_str = prev_session_sets['date'].iloc[0] if not prev_session_sets.empty else None
+    
+    prev_badge = f"<span style='color: #a7f3d0; font-size: 0.8rem; margin-left: 8px;'>📅 Last: {prev_date_str}</span>" if prev_date_str else ""
+    
     # ─── INTERACTIVE HEVY-STYLE EXERCISE CARD ───
     st.markdown(f"""
     <div style="background: #1e293b; border-radius: 12px; padding: 16px; border: 1px solid #334155; margin-bottom: 15px;">
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <h3 style="margin: 0; color: #ffffff; font-size: 1.3rem;">🏋️‍♂️ {selected_exercise}</h3>
-                <span style="color: #38bdf8; font-size: 0.85rem; font-weight: 600;">{muscle_group}</span>
+                <span style="color: #38bdf8; font-size: 0.85rem; font-weight: 600;">{muscle_group}</span>{prev_badge}
             </div>
             <span style="background: #334155; color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.8rem;">
                 {date_str}
@@ -626,28 +781,21 @@ with tab3:
     with col_timer:
         rest_choice = st.selectbox("Rest Timer", ["Rest: Off", "Rest: 30s", "Rest: 60s", "Rest: 90s", "Rest: 120s", "Rest: 180s"], index=2, key=f"rest_{selected_exercise}", label_visibility="collapsed")
     
-    # Fetch existing logged sets for this exercise on this date
-    conn = get_db_connection()
-    current_ex_sets = pd.read_sql_query(
-        "SELECT id, set_number, weight_kg, reps FROM workout_logs WHERE date = ? AND exercise_name = ? ORDER BY set_number ASC",
-        conn, params=(date_str, selected_exercise)
-    )
-    conn.close()
-    
-    existing_sets_dict = {row['set_number']: row for _, row in current_ex_sets.iterrows()}
-    
     # Maintain number of set rows in session_state
     state_key_count = f"num_sets_{selected_exercise}_{date_str}"
     if state_key_count not in st.session_state:
         max_logged = max(existing_sets_dict.keys()) if existing_sets_dict else 3
-        st.session_state[state_key_count] = max(3, max_logged)
+        max_prev = max(prev_sets_dict.keys()) if prev_sets_dict else 3
+        st.session_state[state_key_count] = max(3, max_logged, max_prev)
         
     num_rows = st.session_state[state_key_count]
     
-    # Set Table Headers
-    col_h_set, col_h_kg, col_h_reps, col_h_act = st.columns([1, 2.5, 2.5, 2])
+    # Set Table Headers (5 columns: SET, PREV, KG, REPS, ACTION)
+    col_h_set, col_h_prev, col_h_kg, col_h_reps, col_h_act = st.columns([1, 2.2, 2.2, 2.2, 1.8])
     with col_h_set:
         st.markdown("<p style='text-align:center; font-weight:bold; color:#94a3b8; font-size:0.8rem; margin:0;'>SET</p>", unsafe_allow_html=True)
+    with col_h_prev:
+        st.markdown("<p style='text-align:center; font-weight:bold; color:#38bdf8; font-size:0.8rem; margin:0;'>PREVIOUS</p>", unsafe_allow_html=True)
     with col_h_kg:
         st.markdown("<p style='text-align:center; font-weight:bold; color:#94a3b8; font-size:0.8rem; margin:0;'>KG</p>", unsafe_allow_html=True)
     with col_h_reps:
@@ -659,11 +807,23 @@ with tab3:
     for s_idx in range(1, num_rows + 1):
         is_saved = s_idx in existing_sets_dict
         saved_row = existing_sets_dict.get(s_idx, None)
+        prev_row = prev_sets_dict.get(s_idx, None)
         
-        default_kg = float(saved_row['weight_kg']) if is_saved else 10.0
-        default_reps = int(saved_row['reps']) if is_saved else 12
+        # Intelligent defaults from previous session or previous set
+        if is_saved:
+            default_kg = float(saved_row['weight_kg'])
+            default_reps = int(saved_row['reps'])
+        elif prev_row is not None:
+            default_kg = float(prev_row['weight_kg'])
+            default_reps = int(prev_row['reps'])
+        elif (s_idx - 1) in existing_sets_dict:
+            default_kg = float(existing_sets_dict[s_idx - 1]['weight_kg'])
+            default_reps = int(existing_sets_dict[s_idx - 1]['reps'])
+        else:
+            default_kg = 10.0
+            default_reps = 12
         
-        c_set, c_kg, c_reps, c_act = st.columns([1, 2.5, 2.5, 2])
+        c_set, c_prev, c_kg, c_reps, c_act = st.columns([1, 2.2, 2.2, 2.2, 1.8])
         
         with c_set:
             badge_bg = "#22c55e" if is_saved else "#334155"
@@ -672,6 +832,19 @@ with tab3:
                 f"<div style='background:{badge_bg}; color:{badge_text}; font-weight:bold; text-align:center; border-radius:8px; padding:6px 0; margin-top:2px;'>{s_idx}</div>",
                 unsafe_allow_html=True
             )
+            
+        with c_prev:
+            if prev_row is not None:
+                p_text = f"{prev_row['weight_kg']}k × {prev_row['reps']}"
+                st.markdown(
+                    f"<div style='background:#0f172a; border:1px solid #334155; color:#cbd5e1; font-weight:600; text-align:center; border-radius:8px; padding:6px 2px; font-size:0.75rem; margin-top:2px;' title='Last session load'>{p_text}</div>",
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    "<div style='color:#475569; text-align:center; padding:6px 0; font-size:0.85rem; margin-top:2px;'>—</div>",
+                    unsafe_allow_html=True
+                )
             
         with c_kg:
             val_kg = st.number_input(
@@ -823,11 +996,17 @@ with tab4:
                         meal_macros = analyze_meal_image(api_key, image, model_name=model_choice)
                         duration = time.time() - start_time
                         
+                        st.session_state['ai_base_calories'] = float(meal_macros.get("calories", 0.0))
+                        st.session_state['ai_base_protein'] = float(meal_macros.get("protein", 0.0))
+                        st.session_state['ai_base_carbs'] = float(meal_macros.get("carbs", 0.0))
+                        st.session_state['ai_base_fat'] = float(meal_macros.get("fat", 0.0))
+                        st.session_state['ai_portion'] = 1.0
+                        
                         st.session_state['ai_description'] = str(meal_macros.get("food_description", "Meal"))
-                        st.session_state['ai_calories'] = float(meal_macros.get("calories", 0.0))
-                        st.session_state['ai_protein'] = float(meal_macros.get("protein", 0.0))
-                        st.session_state['ai_carbs'] = float(meal_macros.get("carbs", 0.0))
-                        st.session_state['ai_fat'] = float(meal_macros.get("fat", 0.0))
+                        st.session_state['ai_calories'] = st.session_state['ai_base_calories']
+                        st.session_state['ai_protein'] = st.session_state['ai_base_protein']
+                        st.session_state['ai_carbs'] = st.session_state['ai_base_carbs']
+                        st.session_state['ai_fat'] = st.session_state['ai_base_fat']
                         model_used_name = meal_macros.get("model_used", model_choice.split(" ")[0])
                         st.session_state['scan_success_msg'] = f"⚡ Meal Analyzed in {duration:.1f}s ({model_used_name})! Verify details below."
                         st.rerun()
@@ -839,6 +1018,49 @@ with tab4:
     if 'scan_success_msg' in st.session_state:
         st.success(st.session_state['scan_success_msg'])
     
+    # ─── QUICK PORTION MULTIPLIER ───
+    if 'ai_base_calories' in st.session_state:
+        st.markdown("<p style='margin: 8px 0 4px 0; font-weight: 600; color: #94a3b8; font-size: 0.9rem;'>🍽️ PORTION SIZE MULTIPLIER</p>", unsafe_allow_html=True)
+        col_p05, col_p10, col_p15, col_p20 = st.columns(4)
+        current_mult = st.session_state.get('ai_portion', 1.0)
+        
+        with col_p05:
+            p05_label = "✅ 0.5x" if current_mult == 0.5 else "0.5x (Half)"
+            if st.button(p05_label, key="btn_portion_05"):
+                st.session_state['ai_portion'] = 0.5
+                st.session_state['ai_calories'] = round(st.session_state['ai_base_calories'] * 0.5, 1)
+                st.session_state['ai_protein'] = round(st.session_state['ai_base_protein'] * 0.5, 1)
+                st.session_state['ai_carbs'] = round(st.session_state['ai_base_carbs'] * 0.5, 1)
+                st.session_state['ai_fat'] = round(st.session_state['ai_base_fat'] * 0.5, 1)
+                st.rerun()
+        with col_p10:
+            p10_label = "✅ 1.0x" if current_mult == 1.0 else "1.0x (Regular)"
+            if st.button(p10_label, key="btn_portion_10"):
+                st.session_state['ai_portion'] = 1.0
+                st.session_state['ai_calories'] = st.session_state['ai_base_calories']
+                st.session_state['ai_protein'] = st.session_state['ai_base_protein']
+                st.session_state['ai_carbs'] = st.session_state['ai_base_carbs']
+                st.session_state['ai_fat'] = st.session_state['ai_base_fat']
+                st.rerun()
+        with col_p15:
+            p15_label = "✅ 1.5x" if current_mult == 1.5 else "1.5x (Large)"
+            if st.button(p15_label, key="btn_portion_15"):
+                st.session_state['ai_portion'] = 1.5
+                st.session_state['ai_calories'] = round(st.session_state['ai_base_calories'] * 1.5, 1)
+                st.session_state['ai_protein'] = round(st.session_state['ai_base_protein'] * 1.5, 1)
+                st.session_state['ai_carbs'] = round(st.session_state['ai_base_carbs'] * 1.5, 1)
+                st.session_state['ai_fat'] = round(st.session_state['ai_base_fat'] * 1.5, 1)
+                st.rerun()
+        with col_p20:
+            p20_label = "✅ 2.0x" if current_mult == 2.0 else "2.0x (Double)"
+            if st.button(p20_label, key="btn_portion_20"):
+                st.session_state['ai_portion'] = 2.0
+                st.session_state['ai_calories'] = round(st.session_state['ai_base_calories'] * 2.0, 1)
+                st.session_state['ai_protein'] = round(st.session_state['ai_base_protein'] * 2.0, 1)
+                st.session_state['ai_carbs'] = round(st.session_state['ai_base_carbs'] * 2.0, 1)
+                st.session_state['ai_fat'] = round(st.session_state['ai_base_fat'] * 2.0, 1)
+                st.rerun()
+                
     desc = st.text_input("Food Description", value=st.session_state.get('ai_description', ''))
     col_cal, col_p = st.columns(2)
     with col_cal:
@@ -873,7 +1095,7 @@ with tab4:
             conn.close()
             st.success(f"Saved: {desc} ({cals:.0f} kcal, {prots:.1f}g protein) logged!")
             
-            for key in ['ai_description', 'ai_calories', 'ai_protein', 'ai_carbs', 'ai_fat', 'scan_success_msg']:
+            for key in ['ai_description', 'ai_calories', 'ai_protein', 'ai_carbs', 'ai_fat', 'scan_success_msg', 'ai_base_calories', 'ai_base_protein', 'ai_base_carbs', 'ai_base_fat', 'ai_portion']:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
