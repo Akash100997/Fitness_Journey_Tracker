@@ -152,7 +152,59 @@ def init_db():
 init_db()
 
 # ─── GEMINI AI NUTRITION SERVICE ───
-def analyze_meal_image(api_key, image_bytes, image_mime, model_name="gemini-2.5-flash"):
+DEFAULT_LATEST_MODELS = [
+    "gemini-3.8-flash (Latest - Recommended)",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.1-flash",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-3.8-pro",
+    "gemini-3.7-pro"
+]
+
+def get_available_gemini_models(api_key):
+    if not api_key:
+        return DEFAULT_LATEST_MODELS
+    
+    # 1. Try modern google-genai
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        models_list = []
+        for m in client.models.list():
+            actions = getattr(m, 'supported_actions', []) or []
+            if 'generateContent' in actions:
+                m_name = m.name.replace('models/', '')
+                if 'gemini' in m_name.lower():
+                    models_list.append(m_name)
+        if models_list:
+            # Sort with newest 3.x series first
+            models_list.sort(key=lambda name: ("3.8" not in name, "3.7" not in name, "3.6" not in name, "3.1" not in name, "2.5" not in name, "2.0" not in name))
+            return models_list
+    except Exception:
+        pass
+        
+    # 2. Try legacy google.generativeai
+    try:
+        import google.generativeai as legacy_genai
+        legacy_genai.configure(api_key=api_key)
+        models_list = []
+        for m in legacy_genai.list_models():
+            if 'generateContent' in getattr(m, 'supported_generation_methods', []):
+                m_name = m.name.replace('models/', '')
+                if 'gemini' in m_name.lower():
+                    models_list.append(m_name)
+        if models_list:
+            models_list.sort(key=lambda name: ("3.8" not in name, "3.7" not in name, "3.6" not in name, "3.1" not in name, "2.5" not in name, "2.0" not in name))
+            return models_list
+    except Exception:
+        pass
+        
+    return DEFAULT_LATEST_MODELS
+
+
+def analyze_meal_image(api_key, image, model_name="gemini-3.8-flash"):
     prompt = """
     You are an expert sports nutritionist AI. Analyze this image of a meal.
     Calculate and estimate the macronutrient breakdown.
@@ -169,17 +221,27 @@ def analyze_meal_image(api_key, image_bytes, image_mime, model_name="gemini-2.5-
     Ensure all nutritional values are numeric. Be as accurate as possible with portion estimates.
     """
     
-    # Clean model name from any label notes
-    clean_model = model_name.split(" ")[0].strip()
+    clean_model = model_name.split(" ")[0].replace("models/", "").strip()
     
-    # Priority list of models to try (user choice first, then latest standard fallbacks)
+    # Priority order: user-selected first, then discovered models, then latest 3.x and 2.x
     candidates = [clean_model]
-    for fallback in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro", "gemini-1.5-flash-latest", "gemini-1.5-flash"]:
+    for m in get_available_gemini_models(api_key):
+        m_clean = m.split(" ")[0].replace("models/", "").strip()
+        if m_clean not in candidates:
+            candidates.append(m_clean)
+            
+    for fallback in ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]:
         if fallback not in candidates:
             candidates.append(fallback)
             
+    # Ensure image is in RGB mode for vision models
+    if hasattr(image, "mode") and image.mode in ("RGBA", "P"):
+        image = image.convert("RGB")
+        
     last_err = None
+    attempted = []
     for cand in candidates:
+        attempted.append(cand)
         try:
             # 1. Try modern official google-genai SDK
             try:
@@ -188,10 +250,7 @@ def analyze_meal_image(api_key, image_bytes, image_mime, model_name="gemini-2.5-
                 client = genai.Client(api_key=api_key)
                 response = client.models.generate_content(
                     model=cand,
-                    contents=[
-                        types.Part.from_bytes(data=image_bytes, mime_type=image_mime),
-                        prompt
-                    ],
+                    contents=[image, prompt],
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json"
                     )
@@ -205,7 +264,7 @@ def analyze_meal_image(api_key, image_bytes, image_mime, model_name="gemini-2.5-
                     cand,
                     generation_config={"response_mime_type": "application/json"}
                 )
-                response = model.generate_content([prompt, {"mime_type": image_mime, "data": image_bytes}])
+                response = model.generate_content([prompt, image])
                 text_response = response.text.strip()
                 
             if text_response.startswith("```"):
@@ -218,7 +277,7 @@ def analyze_meal_image(api_key, image_bytes, image_mime, model_name="gemini-2.5-
             last_err = e
             continue
             
-    raise RuntimeError(f"Could not analyze meal with available Gemini models. Last error: {last_err}")
+    raise RuntimeError(f"Models attempted: {attempted}. Last error: {last_err}")
 
 
 # ─── APP SIDEBAR (Settings & AI Key) ───
@@ -233,18 +292,18 @@ except Exception:
     pass
 
 api_key = st.sidebar.text_input("Gemini API Key", value=default_key, type="password", help="Get free key from Google AI Studio (aistudio.google.com)")
-available_models = [
-    "gemini-2.5-flash (Latest Flash - Recommended)",
-    "gemini-2.0-flash (Fast & Stable)",
-    "gemini-2.5-pro (Advanced Reasoning)",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-flash"
-]
-model_choice = st.sidebar.selectbox("Gemini Vision Model", available_models, index=0)
 
 if api_key:
-    st.sidebar.success(f"API Key Ready ({model_choice.split(' ')[0]})")
+    if "verified_models" not in st.session_state or st.session_state.get("last_checked_key") != api_key:
+        found_models = get_available_gemini_models(api_key)
+        st.session_state["verified_models"] = found_models
+        st.session_state["last_checked_key"] = api_key
+        
+    available_models = st.session_state.get("verified_models", DEFAULT_LATEST_MODELS)
+    model_choice = st.sidebar.selectbox("Gemini Vision Model", available_models, index=0)
+    st.sidebar.success(f"Connected: {model_choice.split(' ')[0]}")
 else:
+    model_choice = st.sidebar.selectbox("Gemini Vision Model", DEFAULT_LATEST_MODELS, index=0)
     st.sidebar.warning("Enter Gemini API Key to enable AI Meal Scanning.")
 
 # Profile settings expander
@@ -783,14 +842,7 @@ with tab4:
             else:
                 with st.spinner(f"Analyzing meal ingredients with {model_choice}..."):
                     try:
-                        img_byte_arr = io.BytesIO()
-                        # Convert RGBA to RGB if png
-                        if image.mode in ("RGBA", "P"):
-                            image = image.convert("RGB")
-                        image.save(img_byte_arr, format='JPEG')
-                        img_bytes = img_byte_arr.getvalue()
-                        
-                        meal_macros = analyze_meal_image(api_key, img_bytes, "image/jpeg", model_name=model_choice)
+                        meal_macros = analyze_meal_image(api_key, image, model_name=model_choice)
                         
                         st.session_state['ai_description'] = str(meal_macros.get("food_description", "Meal"))
                         st.session_state['ai_calories'] = float(meal_macros.get("calories", 0.0))
