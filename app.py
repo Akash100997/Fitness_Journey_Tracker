@@ -397,6 +397,24 @@ with tab2:
             display_weights = weights_df.copy()
             display_weights['date'] = display_weights['date'].dt.strftime('%Y-%m-%d')
             st.dataframe(display_weights.sort_values('date', ascending=False), use_container_width=True)
+            
+            st.write("---")
+            st.markdown("##### 🗑️ Delete an Incorrect Weight Entry")
+            all_weight_dates = display_weights['date'].tolist()
+            if all_weight_dates:
+                col_w_del, col_w_btn = st.columns([2, 1])
+                with col_w_del:
+                    del_date = st.selectbox("Select Date to Delete", all_weight_dates, key="del_weight_date")
+                with col_w_btn:
+                    st.write("")
+                    st.write("")
+                    if st.button("Delete Entry", key="btn_del_weight"):
+                        conn = get_db_connection()
+                        conn.execute("DELETE FROM weight_logs WHERE date = ?", (del_date,))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"Deleted weight log for {del_date}!")
+                        st.rerun()
 
 
 # ──────────────────────────────────────────
@@ -472,6 +490,49 @@ with tab3:
             conn.close()
             st.success(f"Logged: Set {set_num} ({weight_val} kg × {reps_val} reps) for {logged_exercise}!")
             
+    # Active Sets Logged for Selected Date
+    conn = get_db_connection()
+    logged_sets_today = pd.read_sql_query(
+        "SELECT id, day_type, exercise_name, set_number, weight_kg, reps FROM workout_logs WHERE date = ? ORDER BY id ASC",
+        conn, params=(log_date.strftime("%Y-%m-%d"),)
+    )
+    conn.close()
+    
+    if not logged_sets_today.empty:
+        st.write("---")
+        st.markdown(f"#### 📋 Logged Sets for {log_date.strftime('%Y-%m-%d')}")
+        st.dataframe(logged_sets_today[['exercise_name', 'set_number', 'weight_kg', 'reps', 'day_type']], use_container_width=True)
+        
+        with st.expander("🗑️ Delete / Remove a Workout Set"):
+            set_options = logged_sets_today['id'].tolist()
+            col_sel_set, col_del_btn = st.columns([2, 1])
+            with col_sel_set:
+                target_set_id = st.selectbox(
+                    "Select Set to Remove",
+                    set_options,
+                    format_func=lambda sid: f"ID {sid}: {logged_sets_today[logged_sets_today['id'] == sid]['exercise_name'].values[0]} — Set {logged_sets_today[logged_sets_today['id'] == sid]['set_number'].values[0]} ({logged_sets_today[logged_sets_today['id'] == sid]['weight_kg'].values[0]} kg × {logged_sets_today[logged_sets_today['id'] == sid]['reps'].values[0]} reps)",
+                    key="select_del_set_id"
+                )
+            with col_del_btn:
+                st.write("")
+                st.write("")
+                if st.button("Delete Set", key="btn_del_single_set"):
+                    conn = get_db_connection()
+                    conn.execute("DELETE FROM workout_logs WHERE id = ?", (target_set_id,))
+                    conn.commit()
+                    conn.close()
+                    st.success("Selected set removed!")
+                    st.rerun()
+            
+            st.write("---")
+            if st.button(f"⚠️ Delete ALL {len(logged_sets_today)} Sets for {log_date.strftime('%Y-%m-%d')}", key="btn_del_all_workout_sets"):
+                conn = get_db_connection()
+                conn.execute("DELETE FROM workout_logs WHERE date = ?", (log_date.strftime("%Y-%m-%d"),))
+                conn.commit()
+                conn.close()
+                st.warning(f"All sets for {log_date.strftime('%Y-%m-%d')} removed!")
+                st.rerun()
+
     # Exercise Progression History
     st.write("---")
     st.subheader("📈 Exercise Progression (Double Progression)")
@@ -498,8 +559,26 @@ with tab3:
             fig.update_layout(template="plotly_dark", yaxis_title="Max Weight (kg)", xaxis_title="Date")
             st.plotly_chart(fig, use_container_width=True)
             
-            with st.expander(f"📋 View Logged Sets for {history_exercise}"):
-                st.dataframe(history_df[['date', 'set_number', 'weight_kg', 'reps']], use_container_width=True)
+            with st.expander(f"📋 View & Manage Logged Sets for {history_exercise}"):
+                st.dataframe(history_df[['id', 'date', 'set_number', 'weight_kg', 'reps']], use_container_width=True)
+                col_hist_id, col_hist_btn = st.columns([2, 1])
+                with col_hist_id:
+                    hist_set_del = st.selectbox(
+                        "Remove Specific Set",
+                        history_df['id'].tolist(),
+                        format_func=lambda hid: f"ID {hid} ({history_df[history_df['id'] == hid]['date'].values[0]}): Set {history_df[history_df['id'] == hid]['set_number'].values[0]} - {history_df[history_df['id'] == hid]['weight_kg'].values[0]}kg × {history_df[history_df['id'] == hid]['reps'].values[0]} reps",
+                        key="select_hist_del_id"
+                    )
+                with col_hist_btn:
+                    st.write("")
+                    st.write("")
+                    if st.button("Delete Set", key="btn_del_hist_set"):
+                        conn = get_db_connection()
+                        conn.execute("DELETE FROM workout_logs WHERE id = ?", (hist_set_del,))
+                        conn.commit()
+                        conn.close()
+                        st.success("Historical set removed!")
+                        st.rerun()
         else:
             st.info("No progression history logged yet for this exercise.")
     else:
