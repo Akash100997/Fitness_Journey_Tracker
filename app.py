@@ -337,7 +337,8 @@ def analyze_meal_image(api_key, image, model_name="gemini-3.5-flash-lite"):
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         max_output_tokens=1000,
-                        temperature=0.2
+                        temperature=0.2,
+                        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
                     )
                 )
                 text_response = response.text.strip()
@@ -428,7 +429,8 @@ def analyze_meal_text(api_key, food_text, model_name="gemini-3.5-flash-lite"):
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         max_output_tokens=1000,
-                        temperature=0.2
+                        temperature=0.2,
+                        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
                     )
                 )
                 text_response = response.text.strip()
