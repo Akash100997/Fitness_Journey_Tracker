@@ -596,12 +596,12 @@ with tab2:
             template="plotly_dark",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         
         with st.expander("📋 View / Manage Weight Log History"):
             display_weights = weights_df.copy()
             display_weights['date'] = display_weights['date'].dt.strftime('%Y-%m-%d')
-            st.dataframe(display_weights.sort_values('date', ascending=False), use_container_width=True)
+            st.dataframe(display_weights.sort_values('date', ascending=False), width="stretch")
             
             st.write("---")
             st.markdown("##### 🗑️ Delete an Incorrect Weight Entry")
@@ -908,7 +908,7 @@ with tab3:
                     
     # + Add Set Button
     st.write("")
-    if st.button("➕ Add Set", key=f"btn_add_set_{selected_exercise}_{date_str}", use_container_width=True):
+    if st.button("➕ Add Set", key=f"btn_add_set_{selected_exercise}_{date_str}", width="stretch"):
         st.session_state[state_key_count] = num_rows + 1
         st.rerun()
         
@@ -931,7 +931,7 @@ with tab3:
             st.metric("Total Lift Volume", f"{total_volume:,.0f} kg")
             
         with st.expander(f"📋 View All Logged Sets for {date_str}"):
-            st.dataframe(today_all_logs[['exercise_name', 'set_number', 'weight_kg', 'reps', 'day_type']], use_container_width=True)
+            st.dataframe(today_all_logs[['exercise_name', 'set_number', 'weight_kg', 'reps', 'day_type']], width="stretch")
             if st.button(f"⚠️ Delete ALL Sets for {date_str}", key="btn_del_all_today"):
                 conn = get_db_connection()
                 conn.execute("DELETE FROM workout_logs WHERE date = ?", (date_str,))
@@ -956,7 +956,7 @@ with tab3:
         fig = px.line(max_lifts, x='date', y='weight_kg', title=f"Max Weight Lifted Trend — {selected_exercise}", markers=True)
         fig.update_traces(line_color="#38bdf8", marker=dict(size=9, color="#ff4b4b"))
         fig.update_layout(template="plotly_dark", yaxis_title="Max Load (kg)", xaxis_title="Date")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.info(f"No previous workouts logged for {selected_exercise}. Complete sets above to start tracking your strength curve!")
 
@@ -984,7 +984,7 @@ with tab4:
     
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
-        st.image(image, caption="Meal Photo Ready for Scan", use_container_width=True)
+        st.image(image, caption="Meal Photo Ready for Scan", width="stretch")
         
         if st.button("🔍 Scan & Calculate Macros with Gemini"):
             if not api_key:
@@ -1111,7 +1111,7 @@ with tab4:
     conn.close()
     
     if not today_logs_df.empty:
-        st.dataframe(today_logs_df[['meal_type', 'food_description', 'calories', 'protein', 'carbs', 'fat']], use_container_width=True)
+        st.dataframe(today_logs_df[['meal_type', 'food_description', 'calories', 'protein', 'carbs', 'fat']], width="stretch")
         
         # Meal deletion option
         with st.expander("🗑️ Delete a Logged Meal"):
