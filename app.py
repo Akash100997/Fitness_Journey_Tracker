@@ -76,10 +76,87 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ─── DATABASE SERVICES ───
+# ─── DATABASE SERVICES (Supports Local SQLite & Turso Cloud Serverless SQLite) ───
 DB_FILE = "robur_fit.db"
 
+class TursoCompatCursor:
+    def __init__(self, client):
+        self.client = client
+        self._result = None
+        self._row_idx = 0
+
+    def execute(self, sql, params=None):
+        if params is None:
+            self._result = self.client.execute(sql)
+        else:
+            p = list(params) if isinstance(params, (list, tuple)) else params
+            self._result = self.client.execute(sql, p)
+        self._row_idx = 0
+        return self
+
+    def fetchone(self):
+        if not self._result or not self._result.rows or self._row_idx >= len(self._result.rows):
+            return None
+        row = self._result.rows[self._row_idx]
+        self._row_idx += 1
+        return row
+
+    def fetchall(self):
+        if not self._result or not self._result.rows:
+            return []
+        rows = self._result.rows[self._row_idx:]
+        self._row_idx = len(self._result.rows)
+        return rows
+
+    def close(self):
+        pass
+
+    @property
+    def description(self):
+        if not self._result or not self._result.columns:
+            return None
+        return [(col, None, None, None, None, None, None) for col in self._result.columns]
+
+class TursoCompatConnection:
+    def __init__(self, client):
+        self.client = client
+
+    def cursor(self):
+        return TursoCompatCursor(self.client)
+
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        return cur.execute(sql, params)
+
+    def commit(self):
+        pass
+
+    def close(self):
+        self.client.close()
+
 def get_db_connection():
+    # If Turso Cloud database credentials exist in secrets or environment, connect to Turso
+    turso_url = os.environ.get("TURSO_DATABASE_URL", "")
+    turso_token = os.environ.get("TURSO_AUTH_TOKEN", "")
+    try:
+        if hasattr(st, "secrets"):
+            turso_url = st.secrets.get("TURSO_DATABASE_URL", turso_url)
+            turso_token = st.secrets.get("TURSO_AUTH_TOKEN", turso_token)
+    except Exception:
+        pass
+
+    if turso_url and turso_token:
+        try:
+            import libsql_client
+            clean_url = turso_url.strip()
+            if clean_url.startswith("libsql://"):
+                clean_url = "https://" + clean_url[len("libsql://"):]
+            client = libsql_client.create_client_sync(url=clean_url, auth_token=turso_token.strip())
+            return TursoCompatConnection(client)
+        except Exception as e:
+            st.error(f"Turso Cloud connection warning: {e}. Falling back to local SQLite.")
+
+    # Local SQLite fallback
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
@@ -285,6 +362,96 @@ def analyze_meal_image(api_key, image, model_name="gemini-3.5-flash-lite"):
             
     raise RuntimeError(f"Could not analyze meal. Last error: {last_err}")
 
+def analyze_meal_text(api_key, food_text, model_name="gemini-3.5-flash-lite"):
+    prompt = f"""
+    You are an expert sports nutritionist AI. Analyze this meal or food item description:
+    "{food_text}"
+    
+    Estimate the macronutrient breakdown. The user is a Hindu eggetarian (no meat/fish, skips eggs on Saturday, relies on lentils, paneer, tofu, soya chunks, eggs on weekdays, curd, roti, rice).
+    
+    Output ONLY a valid JSON object matching this schema:
+    {{
+      "food_description": "Clean, descriptive name of the food item or meal with portions (e.g. One Cup of Coffee with Light Sugar)",
+      "calories": 45.0,
+      "protein": 1.5,
+      "carbs": 7.0,
+      "fat": 1.0
+    }}
+    Output numeric values only. Be realistic with ingredients, preparation styles, and portion sizes implied by the user's description.
+    """
+    
+    clean_model = model_name.split(" ")[0].replace("models/", "").strip()
+    
+    # Priority order of models to try
+    candidates = [clean_model]
+    for m in [
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-flash-lite-latest",
+        "gemini-flash-latest",
+        "gemini-3.8-flash",
+        "gemini-3.7-flash"
+    ]:
+        if m not in candidates:
+            candidates.append(m)
+            
+    last_err = None
+    for cand in candidates:
+        try:
+            text_response = None
+            # 1. Try modern official google-genai SDK
+            try:
+                from google import genai
+                from google.genai import types
+                client = genai.Client(api_key=api_key)
+                
+                response = client.models.generate_content(
+                    model=cand,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        max_output_tokens=1000,
+                        temperature=0.2
+                    )
+                )
+                text_response = response.text.strip()
+            except Exception as e_genai:
+                err_str = str(e_genai)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    last_err = e_genai
+                    continue
+                    
+                # 2. Fallback to legacy google.generativeai SDK
+                import google.generativeai as legacy_genai
+                legacy_genai.configure(api_key=api_key)
+                model = legacy_genai.GenerativeModel(
+                    cand,
+                    generation_config={
+                        "response_mime_type": "application/json",
+                        "max_output_tokens": 1000,
+                        "temperature": 0.2
+                    }
+                )
+                response = model.generate_content(prompt)
+                text_response = response.text.strip()
+                
+            if not text_response:
+                continue
+                
+            if text_response.startswith("```"):
+                text_response = text_response.split("```")[1]
+                if text_response.startswith("json"):
+                    text_response = text_response[4:]
+                    
+            parsed_data = json.loads(text_response.strip())
+            parsed_data["model_used"] = cand
+            return parsed_data
+        except Exception as e:
+            last_err = e
+            continue
+            
+    raise RuntimeError(f"Could not analyze meal text. Last error: {last_err}")
+
 
 # ─── APP SIDEBAR (Settings & AI Key) ───
 st.sidebar.title("⚙️ App Settings")
@@ -299,7 +466,7 @@ except Exception:
 
 api_key = st.sidebar.text_input("Gemini API Key", value=default_key, type="password", help="Get free key from Google AI Studio (aistudio.google.com)")
 
-model_choice = st.sidebar.selectbox("Gemini Vision Model", CURATED_MODELS, index=0)
+model_choice = st.sidebar.selectbox("Gemini AI Model", CURATED_MODELS, index=0)
 
 if api_key:
     st.sidebar.success(f"API Key Ready ({model_choice.split(' ')[0]})")
@@ -973,27 +1140,56 @@ with tab4:
     else:
         st.success("🍳 **Weekday Nutrition**: Ensure you meet your 110g protein target using boiled eggs, omelettes, paneer, and whole-food sources.")
         
-    st.subheader("📷 Capture or Upload Meal Image")
+    st.subheader("🍽️ Log Meal with AI")
     
-    input_method = st.radio("Choose Input Method", ["Upload Image", "Use Camera"], horizontal=True)
-    uploaded_file = None
-    if input_method == "Use Camera":
-        uploaded_file = st.camera_input("Take a photo of your meal")
-    else:
-        uploaded_file = st.file_uploader("Upload meal photo", type=["jpg", "jpeg", "png"])
+    input_method = st.radio(
+        "Choose Input Method",
+        ["📝 Describe Meal (Text)", "📁 Upload Image", "📷 Use Camera"],
+        horizontal=True
+    )
     
-    if uploaded_file is not None:
-        image = Image.open(uploaded_file)
-        st.image(image, caption="Meal Photo Ready for Scan", width="stretch")
+    if input_method == "📝 Describe Meal (Text)":
+        st.markdown("<p style='color: #94a3b8; font-size: 0.9rem; margin-bottom: 6px;'>Type what you ate or drank (e.g. portions, ingredients, preparation):</p>", unsafe_allow_html=True)
         
-        if st.button("🔍 Scan & Calculate Macros with Gemini"):
+        # Sample prompt chips for quick logging
+        st.caption("💡 Quick Suggestions:")
+        chip_col1, chip_col2, chip_col3, chip_col4 = st.columns(4)
+        with chip_col1:
+            if st.button("☕ Coffee w/ Sugar", key="chip_coffee"):
+                st.session_state['meal_text_input_val'] = "One Cup of Coffee with Light Sugar"
+                st.rerun()
+        with chip_col2:
+            if st.button("🥚 2 Eggs & Toast", key="chip_eggs"):
+                st.session_state['meal_text_input_val'] = "2 Boiled Eggs with 1 slice whole wheat toast"
+                st.rerun()
+        with chip_col3:
+            if st.button("🥣 Dal & 2 Rotis", key="chip_roti"):
+                st.session_state['meal_text_input_val'] = "2 Phulkas / Rotis with 1 medium bowl Moong Dal and salad"
+                st.rerun()
+        with chip_col4:
+            if st.button("🥤 Whey in Water", key="chip_whey"):
+                st.session_state['meal_text_input_val'] = "1 Scoop Whey Protein Isolate mixed in 300ml water"
+                st.rerun()
+                
+        meal_text = st.text_area(
+            "Meal Description",
+            value=st.session_state.get('meal_text_input_val', ''),
+            placeholder="e.g. One Cup of Coffee with Light Sugar\nor: 150g Paneer tikka with green chutney and salad",
+            height=85,
+            key="input_meal_text",
+            label_visibility="collapsed"
+        )
+        
+        if st.button("🔍 Analyze Nutrition with Gemini", key="btn_analyze_text"):
             if not api_key:
                 st.error("Please provide a valid Gemini API Key in the sidebar.")
+            elif not meal_text.strip():
+                st.warning("Please enter what you ate or drank first.")
             else:
-                with st.spinner(f"Analyzing meal ingredients with {model_choice}..."):
+                with st.spinner(f"Analyzing nutrition for '{meal_text.strip()}' with {model_choice}..."):
                     try:
                         start_time = time.time()
-                        meal_macros = analyze_meal_image(api_key, image, model_name=model_choice)
+                        meal_macros = analyze_meal_text(api_key, meal_text.strip(), model_name=model_choice)
                         duration = time.time() - start_time
                         
                         st.session_state['ai_base_calories'] = float(meal_macros.get("calories", 0.0))
@@ -1002,16 +1198,54 @@ with tab4:
                         st.session_state['ai_base_fat'] = float(meal_macros.get("fat", 0.0))
                         st.session_state['ai_portion'] = 1.0
                         
-                        st.session_state['ai_description'] = str(meal_macros.get("food_description", "Meal"))
+                        st.session_state['ai_description'] = str(meal_macros.get("food_description", meal_text.strip()))
                         st.session_state['ai_calories'] = st.session_state['ai_base_calories']
                         st.session_state['ai_protein'] = st.session_state['ai_base_protein']
                         st.session_state['ai_carbs'] = st.session_state['ai_base_carbs']
                         st.session_state['ai_fat'] = st.session_state['ai_base_fat']
                         model_used_name = meal_macros.get("model_used", model_choice.split(" ")[0])
-                        st.session_state['scan_success_msg'] = f"⚡ Meal Analyzed in {duration:.1f}s ({model_used_name})! Verify details below."
+                        st.session_state['scan_success_msg'] = f"⚡ Nutrition Analyzed in {duration:.1f}s ({model_used_name})! Verify details below."
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Failed to analyze image: {e}")
+                        st.error(f"Failed to analyze meal: {e}")
+                        
+    else:
+        uploaded_file = None
+        if input_method == "📷 Use Camera":
+            uploaded_file = st.camera_input("Take a photo of your meal")
+        else:
+            uploaded_file = st.file_uploader("Upload meal photo", type=["jpg", "jpeg", "png"])
+        
+        if uploaded_file is not None:
+            image = Image.open(uploaded_file)
+            st.image(image, caption="Meal Photo Ready for Scan", width="stretch")
+            
+            if st.button("🔍 Scan & Calculate Macros with Gemini", key="btn_scan_image"):
+                if not api_key:
+                    st.error("Please provide a valid Gemini API Key in the sidebar.")
+                else:
+                    with st.spinner(f"Analyzing meal ingredients with {model_choice}..."):
+                        try:
+                            start_time = time.time()
+                            meal_macros = analyze_meal_image(api_key, image, model_name=model_choice)
+                            duration = time.time() - start_time
+                            
+                            st.session_state['ai_base_calories'] = float(meal_macros.get("calories", 0.0))
+                            st.session_state['ai_base_protein'] = float(meal_macros.get("protein", 0.0))
+                            st.session_state['ai_base_carbs'] = float(meal_macros.get("carbs", 0.0))
+                            st.session_state['ai_base_fat'] = float(meal_macros.get("fat", 0.0))
+                            st.session_state['ai_portion'] = 1.0
+                            
+                            st.session_state['ai_description'] = str(meal_macros.get("food_description", "Meal"))
+                            st.session_state['ai_calories'] = st.session_state['ai_base_calories']
+                            st.session_state['ai_protein'] = st.session_state['ai_base_protein']
+                            st.session_state['ai_carbs'] = st.session_state['ai_base_carbs']
+                            st.session_state['ai_fat'] = st.session_state['ai_base_fat']
+                            model_used_name = meal_macros.get("model_used", model_choice.split(" ")[0])
+                            st.session_state['scan_success_msg'] = f"⚡ Meal Analyzed in {duration:.1f}s ({model_used_name})! Verify details below."
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to analyze image: {e}")
                         
     st.write("---")
     st.subheader("📝 Verify & Save to Food Log")
@@ -1095,7 +1329,7 @@ with tab4:
             conn.close()
             st.success(f"Saved: {desc} ({cals:.0f} kcal, {prots:.1f}g protein) logged!")
             
-            for key in ['ai_description', 'ai_calories', 'ai_protein', 'ai_carbs', 'ai_fat', 'scan_success_msg', 'ai_base_calories', 'ai_base_protein', 'ai_base_carbs', 'ai_base_fat', 'ai_portion']:
+            for key in ['ai_description', 'ai_calories', 'ai_protein', 'ai_carbs', 'ai_fat', 'scan_success_msg', 'ai_base_calories', 'ai_base_protein', 'ai_base_carbs', 'ai_base_fat', 'ai_portion', 'meal_text_input_val']:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
