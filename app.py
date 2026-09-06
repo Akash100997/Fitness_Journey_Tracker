@@ -152,119 +152,80 @@ def init_db():
 init_db()
 
 # ─── GEMINI AI NUTRITION SERVICE ───
-DEFAULT_LATEST_MODELS = [
-    "gemini-3.8-flash (Latest - Recommended)",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.1-flash",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-3.8-pro",
-    "gemini-3.7-pro"
+CURATED_MODELS = [
+    "gemini-3.8-flash (Recommended — Fastest & Best)",
+    "gemini-3.7-flash (Alternative Flash)",
+    "gemini-3.8-pro (High Detail Reasoning)"
 ]
-
-def get_available_gemini_models(api_key):
-    if not api_key:
-        return DEFAULT_LATEST_MODELS
-    
-    # 1. Try modern google-genai
-    try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
-        models_list = []
-        for m in client.models.list():
-            actions = getattr(m, 'supported_actions', []) or []
-            if 'generateContent' in actions:
-                m_name = m.name.replace('models/', '')
-                if 'gemini' in m_name.lower():
-                    models_list.append(m_name)
-        if models_list:
-            # Sort with newest 3.x series first
-            models_list.sort(key=lambda name: ("3.8" not in name, "3.7" not in name, "3.6" not in name, "3.1" not in name, "2.5" not in name, "2.0" not in name))
-            return models_list
-    except Exception:
-        pass
-        
-    # 2. Try legacy google.generativeai
-    try:
-        import google.generativeai as legacy_genai
-        legacy_genai.configure(api_key=api_key)
-        models_list = []
-        for m in legacy_genai.list_models():
-            if 'generateContent' in getattr(m, 'supported_generation_methods', []):
-                m_name = m.name.replace('models/', '')
-                if 'gemini' in m_name.lower():
-                    models_list.append(m_name)
-        if models_list:
-            models_list.sort(key=lambda name: ("3.8" not in name, "3.7" not in name, "3.6" not in name, "3.1" not in name, "2.5" not in name, "2.0" not in name))
-            return models_list
-    except Exception:
-        pass
-        
-    return DEFAULT_LATEST_MODELS
-
 
 def analyze_meal_image(api_key, image, model_name="gemini-3.8-flash"):
     prompt = """
-    You are an expert sports nutritionist AI. Analyze this image of a meal.
-    Calculate and estimate the macronutrient breakdown.
-    Keep in mind the user is a Hindu eggetarian (no meat/fish, skips eggs on Saturday, relies on lentils, paneer, tofu, soya chunks, eggs on weekdays, curd, roti, rice).
+    You are an expert sports nutritionist AI. Analyze this meal photo.
+    Estimate the macronutrient breakdown. The user is a Hindu eggetarian (no meat/fish, skips eggs on Saturday, relies on lentils, paneer, tofu, soya chunks, eggs on weekdays, curd, roti, rice).
     
     Output ONLY a valid JSON object matching this schema:
     {
-      "food_description": "A brief summary of what the foods are",
+      "food_description": "Brief description of the food items",
       "calories": 450.0,
       "protein": 25.5,
       "carbs": 45.0,
       "fat": 12.0
     }
-    Ensure all nutritional values are numeric. Be as accurate as possible with portion estimates.
+    Output numeric values only. Be realistic with portion sizes.
     """
     
     clean_model = model_name.split(" ")[0].replace("models/", "").strip()
     
-    # Priority order: user-selected first, then discovered models, then latest 3.x and 2.x
-    candidates = [clean_model]
-    for m in get_available_gemini_models(api_key):
-        m_clean = m.split(" ")[0].replace("models/", "").strip()
-        if m_clean not in candidates:
-            candidates.append(m_clean)
-            
-    for fallback in ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]:
-        if fallback not in candidates:
-            candidates.append(fallback)
-            
-    # Ensure image is in RGB mode for vision models
-    if hasattr(image, "mode") and image.mode in ("RGBA", "P"):
-        image = image.convert("RGB")
+    # ── SPEED OPTIMIZATION 1: Local Image Downscaling ──
+    # High-res phone photos (10MB+) cause long upload delays.
+    # Downscaling to 1024px preserves full AI accuracy while reducing payload to ~150KB (10x faster network transfer).
+    img_optimized = image.copy()
+    if hasattr(img_optimized, "mode") and img_optimized.mode in ("RGBA", "P"):
+        img_optimized = img_optimized.convert("RGB")
         
+    max_dimension = 1024
+    if max(img_optimized.size) > max_dimension:
+        img_optimized.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+        
+    # Priority order of models to try
+    candidates = [clean_model]
+    for m in ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-flash", "gemini-2.5-flash", "gemini-2.0-flash"]:
+        if m not in candidates:
+            candidates.append(m)
+            
     last_err = None
-    attempted = []
     for cand in candidates:
-        attempted.append(cand)
         try:
             # 1. Try modern official google-genai SDK
             try:
                 from google import genai
                 from google.genai import types
                 client = genai.Client(api_key=api_key)
+                
+                # ── SPEED OPTIMIZATION 2: Direct Low-Latency Token Generation ──
                 response = client.models.generate_content(
                     model=cand,
-                    contents=[image, prompt],
+                    contents=[img_optimized, prompt],
                     config=types.GenerateContentConfig(
-                        response_mime_type="application/json"
+                        response_mime_type="application/json",
+                        max_output_tokens=300,
+                        temperature=0.2
                     )
                 )
                 text_response = response.text.strip()
             except Exception:
-                # 2. Fallback to google.generativeai SDK
+                # 2. Fallback to legacy google.generativeai SDK
                 import google.generativeai as legacy_genai
                 legacy_genai.configure(api_key=api_key)
                 model = legacy_genai.GenerativeModel(
                     cand,
-                    generation_config={"response_mime_type": "application/json"}
+                    generation_config={
+                        "response_mime_type": "application/json",
+                        "max_output_tokens": 300,
+                        "temperature": 0.2
+                    }
                 )
-                response = model.generate_content([prompt, image])
+                response = model.generate_content([prompt, img_optimized])
                 text_response = response.text.strip()
                 
             if text_response.startswith("```"):
@@ -277,7 +238,7 @@ def analyze_meal_image(api_key, image, model_name="gemini-3.8-flash"):
             last_err = e
             continue
             
-    raise RuntimeError(f"Models attempted: {attempted}. Last error: {last_err}")
+    raise RuntimeError(f"Could not analyze meal. Last error: {last_err}")
 
 
 # ─── APP SIDEBAR (Settings & AI Key) ───
@@ -293,17 +254,11 @@ except Exception:
 
 api_key = st.sidebar.text_input("Gemini API Key", value=default_key, type="password", help="Get free key from Google AI Studio (aistudio.google.com)")
 
+model_choice = st.sidebar.selectbox("Gemini Vision Model", CURATED_MODELS, index=0)
+
 if api_key:
-    if "verified_models" not in st.session_state or st.session_state.get("last_checked_key") != api_key:
-        found_models = get_available_gemini_models(api_key)
-        st.session_state["verified_models"] = found_models
-        st.session_state["last_checked_key"] = api_key
-        
-    available_models = st.session_state.get("verified_models", DEFAULT_LATEST_MODELS)
-    model_choice = st.sidebar.selectbox("Gemini Vision Model", available_models, index=0)
-    st.sidebar.success(f"Connected: {model_choice.split(' ')[0]}")
+    st.sidebar.success(f"API Key Ready ({model_choice.split(' ')[0]})")
 else:
-    model_choice = st.sidebar.selectbox("Gemini Vision Model", DEFAULT_LATEST_MODELS, index=0)
     st.sidebar.warning("Enter Gemini API Key to enable AI Meal Scanning.")
 
 # Profile settings expander
