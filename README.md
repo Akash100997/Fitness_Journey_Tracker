@@ -2,39 +2,39 @@
 
 A mobile-first, responsive personal metabolic, training, and AI nutrition tracking web application built with **Python**, **Streamlit**, **SQLite**, and **Google Generative AI (Gemini)**.
 
-Designed specifically for a 12-week metabolic reset and body recomposition journey.
+Designed for structured metabolic resets, strength progression, and body recomposition journeys.
 
 ---
 
 ## 🌟 Key Features
 
 ### 1. 📊 Dashboard Overview
-* **Accuniq Baselines**: Tracks starting weight (77.8 kg), target weight (66.9 kg), muscle mass (30.4 kg), and target fat loss (10.9 kg).
-* **Daily Budget Cards**: Real-time progress bars for calorie budget (1850 kcal) and protein target (110 g).
-* **12-Week Metabolic Countdown**: Live countdown and week tracker towards target recomposition date.
-* **Metabolic Stats**: Displays resting BMR (1562 kcal), TDEE (2405 kcal), and 3.8 L daily water target.
+* **Body Composition Baselines**: Tracks starting weight, target weight, muscle mass, and fat loss goals.
+* **Daily Budget Cards**: Real-time progress bars for daily calorie budgets and protein targets.
+* **Metabolic Countdown**: Live countdown and week tracker towards your target recomposition milestone.
+* **Hydration & Energy Expenditure**: Visual indicators for resting BMR, TDEE, and daily water targets.
 
 ### 2. ⚖️ Weight Tracker & Rolling Trend
 * Daily morning weigh-in logging.
-* Automatic **7-day rolling moving average** calculation with pandas interpolation to filter daily water/glycogen fluctuations.
-* Interactive **Plotly** visualization featuring daily markers, trend curves, and target reference lines.
+* Automatic **7-day rolling moving average** calculation with interpolation to filter out daily water and glycogen fluctuations.
+* Interactive **Plotly** visualization with trend curves and target reference lines.
 
 ### 3. 🏋️ Workout Routine & Double Progression Logger
-* **5-Day Routine Splits**:
+* **5-Day Split Routines**:
   - **Day 1**: Push Focus (Chest, Shoulders, Triceps)
   - **Day 2**: Pull Focus (Back, Biceps)
   - **Day 3**: Legs Focus
   - **Day 4**: Upper Body Focus (Compounds & Arms)
   - **Day 5**: Lower Body & Core Focus
-* **Zone 2 Cardio Finishers**: Specific daily cardio targets (Treadmill Incline, Elliptical, Cycling, Rowing machine for trunk fat).
-* **Set-by-Set Logging**: Track set numbers, weights (kg), and rep counts.
-* **Exercise Progression History**: Double-progression charts tracking max weight lifted over time for each exercise.
+* **Zone 2 Cardio Finishers**: Tailored daily post-lift aerobic sessions (Incline walking, Elliptical, Cycling, Rowing).
+* **Set-by-Set Logging**: Track set numbers, loads (kg), and rep counts.
+* **Exercise Progression Charts**: Double-progression analytics displaying max load trends over time for each movement.
 
 ### 4. 🥗 AI Food Scanner & Macro Tracker
-* **Gemini Vision Integration**: Take a photo or upload an image of your meal to calculate estimated calories, protein, carbs, and fat.
-* **Model Selection**: Switch between `gemini-1.5-flash`, `gemini-2.0-flash`, or `gemini-1.5-pro`.
-* **Eggetarian & Saturday Egg-Free Alert**: Dynamic dietary guidance, reminding you to swap eggs for paneer, tofu, soya chunks, sprouts, and curd on Saturdays.
-* **Meal Log Table**: Review, log, and manage daily meals.
+* **Gemini Vision Integration**: Snap a photo or upload meal images to estimate calories, protein, carbs, and fat in seconds.
+* **Flexible Model Selection**: Seamlessly toggle between `gemini-1.5-flash`, `gemini-2.0-flash`, and `gemini-1.5-pro`.
+* **Smart Dietary Awareness**: Vegetarian/eggetarian macro recognition, with optional reminder modes for egg-free days.
+* **Daily Nutrition Logs**: Easily review, modify, and manage logged meals throughout the day.
 
 ---
 
@@ -68,17 +68,17 @@ streamlit run app.py
 ```
 
 ### 5. Access on Mobile
-When running locally, your terminal will display a **Network URL** (e.g., `http://192.168.1.XX:8501`). Open this address on your phone's browser while connected to the same Wi-Fi network and add it to your home screen!
+When running locally, your terminal displays a **Network URL** (e.g., `http://192.168.1.XX:8501`). Open this address in your mobile browser while connected to the same local network for a gym-ready companion app!
 
 ---
 
 ## ☁️ Cloud Deployment (Streamlit Community Cloud)
 
-1. Go to [share.streamlit.io](https://share.streamlit.io) and log in with GitHub.
-2. Select repository: `Akash100997/Fitness_Journey_Tracker`.
+1. Sign in to [share.streamlit.io](https://share.streamlit.io) with GitHub.
+2. Select repository: `Akash100997/Fitness_Journey_Tracker` (`main` branch).
 3. Main file path: `app.py`.
-4. In Advanced Settings, add your secret key:
+4. In **Advanced settings**, add your Google AI Studio API key:
    ```toml
    GEMINI_API_KEY = "your-google-ai-studio-api-key"
    ```
-5. Click **Deploy** to get a public HTTPS link accessible on mobile anywhere!
+5. Click **Deploy** to launch your companion app with a permanent public HTTPS URL.
