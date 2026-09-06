@@ -1,0 +1,21 @@
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local SQLite databases (created automatically on launch)
+*.db
+*.sqlite3
+
+# Streamlit secrets & local config
+.streamlit/secrets.toml
+
+# Operating System files
+Thumbs.db
+.DS_Store
