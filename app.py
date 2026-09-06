@@ -152,15 +152,7 @@ def init_db():
 init_db()
 
 # ─── GEMINI AI NUTRITION SERVICE ───
-def analyze_meal_image(api_key, image_bytes, image_mime, model_name="gemini-1.5-flash"):
-    import google.generativeai as genai
-    genai.configure(api_key=api_key)
-    
-    model = genai.GenerativeModel(
-        model_name,
-        generation_config={"response_mime_type": "application/json"}
-    )
-    
+def analyze_meal_image(api_key, image_bytes, image_mime, model_name="gemini-2.5-flash"):
     prompt = """
     You are an expert sports nutritionist AI. Analyze this image of a meal.
     Calculate and estimate the macronutrient breakdown.
@@ -177,16 +169,56 @@ def analyze_meal_image(api_key, image_bytes, image_mime, model_name="gemini-1.5-
     Ensure all nutritional values are numeric. Be as accurate as possible with portion estimates.
     """
     
-    image_parts = [{"mime_type": image_mime, "data": image_bytes}]
-    response = model.generate_content([prompt, image_parts[0]])
-    text_response = response.text.strip()
+    # Clean model name from any label notes
+    clean_model = model_name.split(" ")[0].strip()
     
-    # Clean possible markdown wrap if model returned it despite mime type
-    if text_response.startswith("```"):
-        text_response = text_response.split("```")[1]
-        if text_response.startswith("json"):
-            text_response = text_response[4:]
-    return json.loads(text_response.strip())
+    # Priority list of models to try (user choice first, then latest standard fallbacks)
+    candidates = [clean_model]
+    for fallback in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro", "gemini-1.5-flash-latest", "gemini-1.5-flash"]:
+        if fallback not in candidates:
+            candidates.append(fallback)
+            
+    last_err = None
+    for cand in candidates:
+        try:
+            # 1. Try modern official google-genai SDK
+            try:
+                from google import genai
+                from google.genai import types
+                client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(
+                    model=cand,
+                    contents=[
+                        types.Part.from_bytes(data=image_bytes, mime_type=image_mime),
+                        prompt
+                    ],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json"
+                    )
+                )
+                text_response = response.text.strip()
+            except Exception:
+                # 2. Fallback to google.generativeai SDK
+                import google.generativeai as legacy_genai
+                legacy_genai.configure(api_key=api_key)
+                model = legacy_genai.GenerativeModel(
+                    cand,
+                    generation_config={"response_mime_type": "application/json"}
+                )
+                response = model.generate_content([prompt, {"mime_type": image_mime, "data": image_bytes}])
+                text_response = response.text.strip()
+                
+            if text_response.startswith("```"):
+                text_response = text_response.split("```")[1]
+                if text_response.startswith("json"):
+                    text_response = text_response[4:]
+                    
+            return json.loads(text_response.strip())
+        except Exception as e:
+            last_err = e
+            continue
+            
+    raise RuntimeError(f"Could not analyze meal with available Gemini models. Last error: {last_err}")
 
 
 # ─── APP SIDEBAR (Settings & AI Key) ───
@@ -201,10 +233,17 @@ except Exception:
     pass
 
 api_key = st.sidebar.text_input("Gemini API Key", value=default_key, type="password", help="Get free key from Google AI Studio (aistudio.google.com)")
-model_choice = st.sidebar.selectbox("Gemini Vision Model", ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"], index=0)
+available_models = [
+    "gemini-2.5-flash (Latest Flash - Recommended)",
+    "gemini-2.0-flash (Fast & Stable)",
+    "gemini-2.5-pro (Advanced Reasoning)",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash"
+]
+model_choice = st.sidebar.selectbox("Gemini Vision Model", available_models, index=0)
 
 if api_key:
-    st.sidebar.success(f"API Key Ready ({model_choice})")
+    st.sidebar.success(f"API Key Ready ({model_choice.split(' ')[0]})")
 else:
     st.sidebar.warning("Enter Gemini API Key to enable AI Meal Scanning.")
 
